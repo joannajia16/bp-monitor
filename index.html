@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="血压管家">
+<link rel="manifest" href="manifest.json">
+<title>血压心率管家</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+:root {
+  --primary: #2563eb;
+  --primary-light: #dbeafe;
+  --danger: #ef4444;
+  --danger-light: #fee2e2;
+  --success: #22c55e;
+  --success-light: #dcfce7;
+  --warning: #f59e0b;
+  --warning-light: #fef3c7;
+  --bg: #f0f4f8;
+  --card: #ffffff;
+  --text: #1e293b;
+  --text-secondary: #64748b;
+  --border: #e2e8f0;
+  --radius: 12px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --primary: #3b82f6;
+    --primary-light: #1e3a5f;
+    --danger: #f87171;
+    --danger-light: #3b1c1c;
+    --success: #4ade80;
+    --success-light: #1a3a2a;
+    --warning: #fbbf24;
+    --warning-light: #3a2e0a;
+    --bg: #0f172a;
+    --card: #1e293b;
+    --text: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --border: #334155;
+  }
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+.container { max-width: 480px; margin: 0 auto; padding: 16px; padding-bottom: 80px; }
+
+/* Header */
+.header {
+  text-align: center;
+  padding: 20px 0 16px;
+}
+.header h1 { font-size: 24px; font-weight: 700; }
+.header p { color: var(--text-secondary); font-size: 14px; margin-top: 4px; }
+
+/* Tabs */
+.tabs {
+  display: flex;
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 4px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+}
+.tab {
+  flex: 1;
+  padding: 10px 0;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: var(--text-secondary);
+  border: none;
+  background: none;
+}
+.tab.active { background: var(--primary); color: white; }
+
+/* Card */
+.card {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+}
+.card-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Form */
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.form-group { display: flex; flex-direction: column; }
+.form-group.full { grid-column: 1 / -1; }
+.form-group label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+.form-group input {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 16px;
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+  transition: border 0.2s;
+}
+.form-group input:focus { border-color: var(--primary); }
+
+.btn {
+  width: 100%;
+  padding: 12px;
+  border: none;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-primary { background: var(--primary); color: white; }
+.btn-primary:active { transform: scale(0.98); }
+.btn-outline {
+  background: none;
+  border: 2px dashed var(--border);
+  color: var(--text-secondary);
+  margin-top: 10px;
+}
+.btn-outline:active { background: var(--primary-light); }
+.btn-danger { background: var(--danger); color: white; font-size: 13px; padding: 8px; }
+
+/* CSV Upload */
+.upload-zone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: var(--text-secondary);
+}
+.upload-zone:active { border-color: var(--primary); background: var(--primary-light); }
+.upload-zone input { display: none; }
+.upload-zone .icon { font-size: 32px; margin-bottom: 8px; }
+
+/* Stats Grid */
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.stat-item {
+  padding: 12px;
+  border-radius: 10px;
+  text-align: center;
+}
+.stat-item .stat-value { font-size: 22px; font-weight: 700; }
+.stat-item .stat-label { font-size: 11px; margin-top: 2px; opacity: 0.8; }
+.stat-sys { background: var(--danger-light); color: var(--danger); }
+.stat-dia { background: var(--primary-light); color: var(--primary); }
+.stat-hr { background: var(--warning-light); color: var(--warning); }
+.stat-abnormal { background: var(--danger-light); color: var(--danger); }
+
+/* Chart */
+.chart-container { position: relative; width: 100%; height: 240px; }
+.chart-container canvas { width: 100% !important; }
+
+/* Record list */
+.record-list { max-height: 300px; overflow-y: auto; }
+.record-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+.record-item:last-child { border-bottom: none; }
+.record-item .date { color: var(--text-secondary); font-size: 12px; }
+.record-item .values { display: flex; gap: 12px; font-weight: 600; }
+.record-item .values span { min-width: 40px; text-align: right; }
+.badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.badge-warn { background: var(--danger-light); color: var(--danger); }
+.badge-ok { background: var(--success-light); color: var(--success); }
+
+/* Empty state */
+.empty {
+  text-align: center;
+  padding: 32px 0;
+  color: var(--text-secondary);
+}
+.empty .icon { font-size: 40px; margin-bottom: 8px; }
+
+/* Panel visibility */
+.panel { display: none; }
+.panel.active { display: block; }
+
+/* Toast */
+.toast {
+  position: fixed;
+  bottom: 90px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--text);
+  color: var(--bg);
+  padding: 10px 20px;
+  border-radius: 20px;
+  font-size: 14px;
+  opacity: 0;
+  transition: all 0.3s;
+  z-index: 100;
+  pointer-events: none;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* Install guide overlay */
+.install-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.install-overlay.hidden { display: none; }
+.install-card {
+  background: var(--card);
+  border-radius: 20px;
+  padding: 28px 24px;
+  max-width: 340px;
+  width: 100%;
+  text-align: center;
+  color: var(--text);
+}
+.install-card h2 { font-size: 20px; margin-bottom: 6px; }
+.install-card .subtitle { color: var(--text-secondary); font-size: 13px; margin-bottom: 20px; }
+.install-steps {
+  text-align: left;
+  margin-bottom: 20px;
+}
+.install-step {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.install-step .step-num {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.install-card .btn-primary { margin-top: 4px; }
+.install-card .skip {
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+.install-card .skip:hover { text-decoration: underline; }
+
+/* Install banner (bottom) */
+.install-banner {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--primary);
+  color: white;
+  padding: 14px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 14px;
+  z-index: 999;
+  box-shadow: 0 -2px 10px rgba(0,0,0,0.15);
+}
+.install-banner.hidden { display: none; }
+.install-banner button {
+  background: white;
+  color: var(--primary);
+  border: none;
+  padding: 8px 18px;
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+/* Delete button */
+.del-btn {
+  background: none;
+  border: none;
+  color: var(--danger);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px;
+  opacity: 0.5;
+}
+.del-btn:hover { opacity: 1; }
+
+/* Reference range */
+.ref-table { width: 100%; font-size: 12px; border-collapse: collapse; }
+.ref-table th, .ref-table td {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+.ref-table th { background: var(--bg); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>❤️ 血压心率管家</h1>
+    <p>记录 · 分析 · 健康管理</p>
+  </div>
+
+  <!-- Install guide overlay (first visit on iOS Safari) -->
+  <div id="installOverlay" class="install-overlay hidden">
+    <div class="install-card">
+      <h2>📱 添加到主屏幕</h2>
+      <div class="subtitle">3步变成手机App，无浏览器边框</div>
+      <div class="install-steps">
+        <div class="install-step">
+          <div class="step-num">1</div>
+          <div>点击 Safari 底部的 <strong>分享按钮</strong> <span style="font-size:18px">⬆️</span></div>
+        </div>
+        <div class="install-step">
+          <div class="step-num">2</div>
+          <div>在弹出菜单中选择 <strong>"添加到主屏幕"</strong></div>
+        </div>
+        <div class="install-step">
+          <div class="step-num">3</div>
+          <div>点击右上角 <strong>"添加"</strong> 即可</div>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="closeInstallGuide()">我知道了</button>
+      <div class="skip" onclick="closeInstallGuide()">暂不添加</div>
+    </div>
+  </div>
+
+  <!-- Bottom install banner (non-iOS or returning) -->
+  <div id="installBanner" class="install-banner hidden">
+    <span>📱 添加到主屏幕 → 变成App</span>
+    <button onclick="showInstallGuide()">查看教程</button>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="input">录入</button>
+    <button class="tab" data-tab="analysis">分析</button>
+    <button class="tab" data-tab="records">记录</button>
+    <button class="tab" data-tab="guide">参考</button>
+  </div>
+
+  <!-- Input Panel -->
+  <div class="panel active" id="panel-input">
+    <div class="card">
+      <div class="card-title">📝 手动录入</div>
+      <div class="form-group full" style="margin-bottom:10px">
+        <label>日期时间</label>
+        <input type="datetime-local" id="inputDate">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>收缩压 (mmHg)</label>
+          <input type="number" id="inputSys" placeholder="如 120" min="60" max="260">
+        </div>
+        <div class="form-group">
+          <label>舒张压 (mmHg)</label>
+          <input type="number" id="inputDia" placeholder="如 80" min="30" max="160">
+        </div>
+      </div>
+      <div class="form-group full">
+        <label>心率 (bpm)</label>
+        <input type="number" id="inputHR" placeholder="如 72" min="30" max="220">
+      </div>
+      <button class="btn btn-primary" onclick="addRecord()">保存记录</button>
+    </div>
+
+    <div class="card">
+      <div class="card-title">📂 文件导入</div>
+      <div class="upload-zone" onclick="document.getElementById('dataFile').click()">
+        <div class="icon">📄</div>
+        <div>点击上传文件</div>
+        <div style="font-size:12px;margin-top:4px">支持 CSV / Excel (.xlsx .xls) / 文本</div>
+        <div style="font-size:11px;margin-top:2px;color:var(--text-secondary)">格式：日期, 收缩压, 舒张压, 心率</div>
+        <input type="file" id="dataFile" accept=".csv,.txt,.xlsx,.xls" onchange="importFile(event)">
+      </div>
+      <button class="btn btn-outline" onclick="downloadTemplate()">⬇ 下载CSV模板</button>
+    </div>
+  </div>
+
+  <!-- Analysis Panel -->
+  <div class="panel" id="panel-analysis">
+    <div class="card" id="statsCard" style="display:none">
+      <div class="card-title">📊 数据概览</div>
+      <div class="stats-grid">
+        <div class="stat-item stat-sys">
+          <div class="stat-value" id="avgSys">--</div>
+          <div class="stat-label">平均收缩压</div>
+        </div>
+        <div class="stat-item stat-dia">
+          <div class="stat-value" id="avgDia">--</div>
+          <div class="stat-label">平均舒张压</div>
+        </div>
+        <div class="stat-item stat-hr">
+          <div class="stat-value" id="avgHR">--</div>
+          <div class="stat-label">平均心率</div>
+        </div>
+        <div class="stat-item stat-abnormal">
+          <div class="stat-value" id="abnormalRate">--</div>
+          <div class="stat-label">异常比例</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="chartCard" style="display:none">
+      <div class="card-title">📈 血压趋势</div>
+      <div class="chart-container"><canvas id="bpChart"></canvas></div>
+    </div>
+
+    <div class="card" id="hrChartCard" style="display:none">
+      <div class="card-title">💓 心率趋势</div>
+      <div class="chart-container"><canvas id="hrChart"></canvas></div>
+    </div>
+
+    <div class="empty" id="analysisEmpty">
+      <div class="icon">📊</div>
+      <div>暂无数据，请先录入血压心率记录</div>
+    </div>
+  </div>
+
+  <!-- Records Panel -->
+  <div class="panel" id="panel-records">
+    <div class="card">
+      <div class="card-title">📋 历史记录 <span id="recordCount" style="font-weight:400;color:var(--text-secondary);font-size:12px"></span></div>
+      <div class="record-list" id="recordList">
+        <div class="empty">
+          <div class="icon">📝</div>
+          <div>暂无记录</div>
+        </div>
+      </div>
+    </div>
+    <button class="btn btn-danger" onclick="clearAll()" style="margin-top:8px" id="clearBtn" style="display:none">🗑 清空所有数据</button>
+  </div>
+
+  <!-- Guide Panel -->
+  <div class="panel" id="panel-guide">
+    <div class="card">
+      <div class="card-title">🏥 血压参考范围</div>
+      <table class="ref-table">
+        <tr><th>分类</th><th>收缩压</th><th>舒张压</th></tr>
+        <tr><td>理想</td><td>&lt;120</td><td>&lt;80</td></tr>
+        <tr><td>正常</td><td>120–129</td><td>80–84</td></tr>
+        <tr><td>正常高值</td><td>130–139</td><td>85–89</td></tr>
+        <tr><td>1级高血压</td><td>140–159</td><td>90–99</td></tr>
+        <tr><td>2级高血压</td><td>160–179</td><td>100–109</td></tr>
+        <tr><td>3级高血压</td><td>≥180</td><td>≥110</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-title">💓 心率参考范围</div>
+      <table class="ref-table">
+        <tr><th>状态</th><th>心率 (bpm)</th></tr>
+        <tr><td>心动过缓</td><td>&lt;60</td></tr>
+        <tr><td>正常</td><td>60–100</td></tr>
+        <tr><td>心动过速</td><td>&gt;100</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <div class="card-title">ℹ️ 说明</div>
+      <div style="font-size:13px;color:var(--text-secondary);line-height:1.6">
+        <p>• 本应用仅供参考，不构成医学诊断建议</p>
+        <p>• 数据存储在本地浏览器，不会上传至服务器</p>
+        <p>• 建议每天固定时间测量，保证数据可比性</p>
+        <p>• 测量前静坐5分钟，避免运动/饮食影响</p>
+        <p>• 如有异常，请及时就医</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// === Data Layer ===
+const STORAGE_KEY = 'bp_monitor_data';
+let records = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+let bpChartInstance = null;
+let hrChartInstance = null;
+let deferredPrompt = null;
+
+// === PWA Install ===
+function isStandalone() {
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+
+function isIOS() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent);
+}
+
+// Show install guide on first visit (iOS Safari, not standalone)
+function checkInstallPrompt() {
+  if (isStandalone()) return; // Already an app
+  const dismissed = localStorage.getItem('install_guide_dismissed');
+  if (!dismissed) {
+    if (isIOS()) {
+      showInstallGuide();
+    }
+  }
+  // Show bottom banner for non-standalone users after a delay
+  setTimeout(() => {
+    if (!isStandalone()) {
+      document.getElementById('installBanner').classList.remove('hidden');
+    }
+  }, 5000);
+}
+
+function showInstallGuide() {
+  document.getElementById('installOverlay').classList.remove('hidden');
+}
+
+function closeInstallGuide() {
+  document.getElementById('installOverlay').classList.add('hidden');
+  localStorage.setItem('install_guide_dismissed', '1');
+}
+
+// Chrome desktop install prompt
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  deferredPrompt = e;
+  document.getElementById('installBanner').classList.remove('hidden');
+});
+
+// === Service Worker ===
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
+}
+
+// === Tab Switching ===
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+    if (tab.dataset.tab === 'analysis') refreshAnalysis();
+    if (tab.dataset.tab === 'records') refreshRecords();
+  });
+});
+
+// === Init Date ===
+function initDate() {
+  const now = new Date();
+  const offset = now.getTimezoneOffset() * 60000;
+  const local = new Date(now - offset).toISOString().slice(0, 16);
+  document.getElementById('inputDate').value = local;
+}
+initDate();
+
+// === Add Record ===
+function addRecord() {
+  const date = document.getElementById('inputDate').value;
+  const sys = parseInt(document.getElementById('inputSys').value);
+  const dia = parseInt(document.getElementById('inputDia').value);
+  const hr = parseInt(document.getElementById('inputHR').value);
+
+  if (!date) return showToast('请选择日期');
+  if (!sys || sys < 60 || sys > 260) return showToast('收缩压范围：60-260');
+  if (!dia || dia < 30 || dia > 160) return showToast('舒张压范围：30-160');
+  if (!hr || hr < 30 || hr > 220) return showToast('心率范围：30-220');
+  if (sys <= dia) return showToast('收缩压应大于舒张压');
+
+  records.push({
+    id: Date.now(),
+    date: new Date(date).toISOString(),
+    systolic: sys,
+    diastolic: dia,
+    heartRate: hr
+  });
+  save();
+  showToast('✅ 已保存');
+  document.getElementById('inputSys').value = '';
+  document.getElementById('inputDia').value = '';
+  document.getElementById('inputHR').value = '';
+  initDate();
+}
+
+// === File Import (CSV + Excel) ===
+function importFile(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+
+  if (ext === 'xlsx' || ext === 'xls') {
+    importExcel(file);
+  } else {
+    importCSV(file);
+  }
+  e.target.value = '';
+}
+
+function parseDataRows(rows) {
+  let count = 0;
+  rows.forEach((row, i) => {
+    // Skip header row
+    if (i === 0 && (String(row[0]).match(/日期|date|时间|time/i))) return;
+    const [dateStr, sysStr, diaStr, hrStr] = row.map(v => String(v).trim());
+    const sys = parseInt(sysStr), dia = parseInt(diaStr), hr = parseInt(hrStr);
+    if (isNaN(sys) || isNaN(dia) || isNaN(hr)) return;
+    const dateObj = new Date(dateStr);
+    if (isNaN(dateObj.getTime())) return;
+    records.push({
+      id: Date.now() + i,
+      date: dateObj.toISOString(),
+      systolic: sys,
+      diastolic: dia,
+      heartRate: hr
+    });
+    count++;
+  });
+  return count;
+}
+
+function importCSV(file) {
+  const reader = new FileReader();
+  reader.onload = function(ev) {
+    const lines = ev.target.result.trim().split('\n');
+    const rows = lines.map(line => line.split(/[,;\t]/).map(s => s.trim()));
+    const count = parseDataRows(rows);
+    save();
+    showToast(`✅ 导入 ${count} 条记录`);
+  };
+  reader.readAsText(file);
+}
+
+function importExcel(file) {
+  const reader = new FileReader();
+  reader.onload = function(ev) {
+    try {
+      const wb = XLSX.read(ev.target.result, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+      const count = parseDataRows(rows);
+      save();
+      showToast(`✅ 从Excel导入 ${count} 条记录`);
+    } catch (err) {
+      showToast('❌ Excel解析失败，请检查格式');
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// === CSV Template ===
+function downloadTemplate() {
+  const csv = '日期,收缩压,舒张压,心率\n2026-07-07 08:00,120,80,72\n2026-07-07 20:00,118,76,68\n';
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = '血压记录模板.csv';
+  a.click();
+}
+
+// === Delete Record ===
+function deleteRecord(id) {
+  records = records.filter(r => r.id !== id);
+  save();
+  refreshRecords();
+  showToast('已删除');
+}
+
+// === Clear All ===
+function clearAll() {
+  if (!confirm('确定清空所有数据？此操作不可恢复')) return;
+  records = [];
+  save();
+  refreshRecords();
+  showToast('已清空');
+}
+
+// === Save ===
+function save() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+}
+
+// === Is Abnormal ===
+function isAbnormal(r) {
+  return r.systolic >= 140 || r.diastolic >= 90 || r.systolic < 90 || r.diastolic < 60 || r.heartRate > 100 || r.heartRate < 60;
+}
+
+// === Classify BP ===
+function classifyBP(sys, dia) {
+  if (sys < 120 && dia < 80) return '理想';
+  if (sys < 130 && dia < 85) return '正常';
+  if (sys < 140 && dia < 90) return '正常高值';
+  if (sys < 160 && dia < 100) return '1级高血压';
+  if (sys < 180 && dia < 110) return '2级高血压';
+  return '3级高血压';
+}
+
+// === Refresh Analysis ===
+function refreshAnalysis() {
+  const empty = document.getElementById('analysisEmpty');
+  const statsCard = document.getElementById('statsCard');
+  const chartCard = document.getElementById('chartCard');
+  const hrChartCard = document.getElementById('hrChartCard');
+
+  if (records.length === 0) {
+    empty.style.display = '';
+    statsCard.style.display = 'none';
+    chartCard.style.display = 'none';
+    hrChartCard.style.display = 'none';
+    return;
+  }
+  empty.style.display = 'none';
+  statsCard.style.display = '';
+  chartCard.style.display = '';
+  hrChartCard.style.display = '';
+
+  const sorted = [...records].sort((a, b) => new Date(a.date) - new Date(b.date));
+  const avgSys = Math.round(sorted.reduce((s, r) => s + r.systolic, 0) / sorted.length);
+  const avgDia = Math.round(sorted.reduce((s, r) => s + r.diastolic, 0) / sorted.length);
+  const avgHR = Math.round(sorted.reduce((s, r) => s + r.heartRate, 0) / sorted.length);
+  const abnormal = sorted.filter(isAbnormal).length;
+
+  document.getElementById('avgSys').textContent = avgSys;
+  document.getElementById('avgDia').textContent = avgDia;
+  document.getElementById('avgHR').textContent = avgHR;
+  document.getElementById('abnormalRate').textContent = Math.round(abnormal / sorted.length * 100) + '%';
+
+  // Blood Pressure Chart
+  const chartColor = getComputedStyle(document.documentElement).getPropertyValue('--text').trim();
+  const gridColor = getComputedStyle(document.documentElement).getPropertyValue('--border').trim();
+  const commonScales = {
+    x: {
+      type: 'time',
+      time: { tooltipFormat: 'yyyy-MM-dd HH:mm', displayFormats: { day: 'MM/dd', hour: 'HH:mm' } },
+      grid: { color: gridColor },
+      ticks: { color: chartColor, maxTicksLimit: 6 }
+    }
+  };
+
+  if (bpChartInstance) bpChartInstance.destroy();
+  bpChartInstance = new Chart(document.getElementById('bpChart'), {
+    type: 'line',
+    data: {
+      datasets: [
+        {
+          label: '收缩压',
+          data: sorted.map(r => ({ x: new Date(r.date), y: r.systolic })),
+          borderColor: '#ef4444',
+          backgroundColor: 'rgba(239,68,68,0.1)',
+          fill: false,
+          tension: 0.3,
+          pointRadius: 3,
+          pointBackgroundColor: sorted.map(r => r.systolic >= 140 ? '#ef4444' : '#22c55e')
+        },
+        {
+          label: '舒张压',
+          data: sorted.map(r => ({ x: new Date(r.date), y: r.diastolic })),
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59,130,246,0.1)',
+          fill: false,
+          tension: 0.3,
+          pointRadius: 3,
+          pointBackgroundColor: sorted.map(r => r.diastolic >= 90 ? '#ef4444' : '#22c55e')
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: chartColor } },
+        annotation: {}
+      },
+      scales: {
+        ...commonScales,
+        y: {
+          min: 40, max: 220,
+          grid: { color: gridColor },
+          ticks: { color: chartColor }
+        }
+      }
+    }
+  });
+
+  // Heart Rate Chart
+  if (hrChartInstance) hrChartInstance.destroy();
+  hrChartInstance = new Chart(document.getElementById('hrChart'), {
+    type: 'line',
+    data: {
+      datasets: [{
+        label: '心率',
+        data: sorted.map(r => ({ x: new Date(r.date), y: r.heartRate })),
+        borderColor: '#f59e0b',
+        backgroundColor: 'rgba(245,158,11,0.1)',
+        fill: true,
+        tension: 0.3,
+        pointRadius: 3,
+        pointBackgroundColor: sorted.map(r => (r.heartRate > 100 || r.heartRate < 60) ? '#ef4444' : '#22c55e')
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: chartColor } }
+      },
+      scales: {
+        ...commonScales,
+        y: {
+          min: 40, max: 160,
+          grid: { color: gridColor },
+          ticks: { color: chartColor }
+        }
+      }
+    }
+  });
+}
+
+// === Refresh Records ===
+function refreshRecords() {
+  const list = document.getElementById('recordList');
+  const count = document.getElementById('recordCount');
+  const clearBtn = document.getElementById('clearBtn');
+
+  if (records.length === 0) {
+    list.innerHTML = '<div class="empty"><div class="icon">📝</div><div>暂无记录</div></div>';
+    count.textContent = '';
+    clearBtn.style.display = 'none';
+    return;
+  }
+
+  clearBtn.style.display = '';
+  count.textContent = `(${records.length}条)`;
+  const sorted = [...records].sort((a, b) => new Date(b.date) - new Date(a.date));
+  list.innerHTML = sorted.map(r => {
+    const d = new Date(r.date);
+    const dateStr = `${(d.getMonth()+1).toString().padStart(2,'0')}/${d.getDate().toString().padStart(2,'0')} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+    const ab = isAbnormal(r);
+    const cls = classifyBP(r.systolic, r.diastolic);
+    return `<div class="record-item">
+      <div>
+        <div class="date">${dateStr}</div>
+        <span class="badge ${ab ? 'badge-warn' : 'badge-ok'}">${ab ? '⚠ '+cls : cls}</span>
+      </div>
+      <div class="values">
+        <span style="color:var(--danger)">${r.systolic}</span>
+        <span style="color:var(--primary)">${r.diastolic}</span>
+        <span style="color:var(--warning)">${r.heartRate}</span>
+        <button class="del-btn" onclick="deleteRecord(${r.id})">✕</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// === Toast ===
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2000);
+}
+
+// Init
+refreshRecords();
+checkInstallPrompt();
+</script>
+</body>
+</html>
