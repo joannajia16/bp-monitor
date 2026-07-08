@@ -346,6 +346,77 @@ body {
   text-align: left;
 }
 .ref-table th { background: var(--bg); font-weight: 600; }
+
+/* Doctor panel */
+.risk-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.risk-low { background: var(--success-light); color: var(--success); }
+.risk-mid { background: var(--warning-light); color: var(--warning); }
+.risk-high { background: var(--danger-light); color: var(--danger); }
+.risk-critical { background: #7f1d1d; color: #fca5a5; }
+
+.advice-item {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.advice-item:last-child { border-bottom: none; }
+.advice-item .advice-icon {
+  display: inline-block;
+  width: 22px;
+  text-align: center;
+  margin-right: 6px;
+}
+.advice-item strong { color: var(--text); }
+
+.period-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+.period-item {
+  padding: 10px;
+  border-radius: 8px;
+  text-align: center;
+  font-size: 13px;
+}
+.period-item .p-label { font-size: 11px; opacity: 0.7; margin-bottom: 4px; }
+.period-item .p-value { font-size: 18px; font-weight: 700; }
+.period-item .p-sub { font-size: 10px; opacity: 0.6; margin-top: 2px; }
+
+.pattern-tag {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  margin: 2px 4px 2px 0;
+}
+.pattern-warn { background: var(--danger-light); color: var(--danger); }
+.pattern-info { background: var(--primary-light); color: var(--primary); }
+.pattern-good { background: var(--success-light); color: var(--success); }
+
+.urgent-card {
+  background: linear-gradient(135deg, #7f1d1d, #991b1b);
+  color: #fef2f2;
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 12px;
+}
+.urgent-card h3 { font-size: 16px; margin-bottom: 8px; }
+.urgent-card p { font-size: 13px; line-height: 1.6; opacity: 0.9; }
+
+@media (prefers-color-scheme: dark) {
+  .risk-critical { background: #7f1d1d; color: #fca5a5; }
+  .urgent-card { background: linear-gradient(135deg, #7f1d1d, #991b1b); color: #fef2f2; }
+}
 </style>
 </head>
 <body>
@@ -388,8 +459,8 @@ body {
   <div class="tabs">
     <button class="tab active" data-tab="input">录入</button>
     <button class="tab" data-tab="analysis">分析</button>
+    <button class="tab" data-tab="doctor">🩺医生</button>
     <button class="tab" data-tab="records">记录</button>
-    <button class="tab" data-tab="guide">参考</button>
   </div>
 
   <!-- Input Panel -->
@@ -466,6 +537,17 @@ body {
     <div class="empty" id="analysisEmpty">
       <div class="icon">📊</div>
       <div>暂无数据，请先录入血压心率记录</div>
+    </div>
+  </div>
+
+  <!-- Doctor Panel -->
+  <div class="panel" id="panel-doctor">
+    <div id="doctorContent">
+      <div class="empty">
+        <div class="icon">🩺</div>
+        <div>需要至少3天数据才能进行智能分析</div>
+        <div style="font-size:12px;margin-top:4px">请先录入或上传血压心率数据</div>
+      </div>
     </div>
   </div>
 
@@ -584,6 +666,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     tab.classList.add('active');
     document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
     if (tab.dataset.tab === 'analysis') refreshAnalysis();
+    if (tab.dataset.tab === 'doctor') refreshDoctor();
     if (tab.dataset.tab === 'records') refreshRecords();
   });
 });
@@ -1064,6 +1147,361 @@ function showToast(msg) {
   t.textContent = msg;
   t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 2000);
+}
+
+// ============================================================
+// === 🩺 DOCTOR ANALYSIS ENGINE ===
+// ============================================================
+
+function refreshDoctor() {
+  const container = document.getElementById('doctorContent');
+  if (records.length < 3) {
+    container.innerHTML = '<div class="empty"><div class="icon">🩺</div><div>需要至少3条数据才能进行智能分析</div><div style="font-size:12px;margin-top:4px">请先录入或上传血压心率数据</div></div>';
+    return;
+  }
+
+  const sorted = [...records].sort((a, b) => new Date(a.date) - new Date(b.date));
+  const analysis = runMedicalAnalysis(sorted);
+  container.innerHTML = renderDoctorReport(analysis);
+}
+
+function runMedicalAnalysis(data) {
+  const result = {
+    riskLevel: 'low',
+    riskLabel: '',
+    urgentAlerts: [],
+    patterns: [],
+    periodSummary: {},
+    abnormalPeriods: [],
+    afibIndicators: [],
+    advice: [],
+    nextMonitor: ''
+  };
+
+  // --- Basic stats ---
+  const sysVals = data.map(r => r.systolic);
+  const diaVals = data.map(r => r.diastolic);
+  const hrVals = data.map(r => r.heartRate).filter(v => v > 0);
+  const avgSys = avg(sysVals);
+  const avgDia = avg(diaVals);
+  const avgHR = hrVals.length > 0 ? avg(hrVals) : 0;
+  const maxSys = Math.max(...sysVals);
+  const minDia = Math.min(...diaVals);
+  const abnormalCount = data.filter(isAbnormal).length;
+  const abnormalRate = abnormalCount / data.length;
+
+  // --- Time period analysis ---
+  const periods = { morning: [], afternoon: [], evening: [], night: [] };
+  data.forEach(r => {
+    const h = new Date(r.date).getHours();
+    if (h >= 6 && h < 12) periods.morning.push(r);
+    else if (h >= 12 && h < 18) periods.afternoon.push(r);
+    else if (h >= 18 && h < 22) periods.evening.push(r);
+    else periods.night.push(r);
+  });
+
+  const periodStats = {};
+  for (const [k, v] of Object.entries(periods)) {
+    if (v.length === 0) { periodStats[k] = null; continue; }
+    periodStats[k] = {
+      count: v.length,
+      avgSys: Math.round(avg(v.map(r => r.systolic))),
+      avgDia: Math.round(avg(v.map(r => r.diastolic))),
+      avgHR: v.some(r => r.heartRate > 0) ? Math.round(avg(v.filter(r => r.heartRate > 0).map(r => r.heartRate))) : 0,
+      abnormalRate: Math.round(v.filter(isAbnormal).length / v.length * 100)
+    };
+  }
+  result.periodSummary = periodStats;
+
+  // --- Abnormal time segments ---
+  const abnormalSegs = [];
+  let segStart = null;
+  data.forEach((r, i) => {
+    const ab = isAbnormal(r);
+    if (ab && !segStart) segStart = r;
+    if (!ab && segStart) {
+      abnormalSegs.push({ start: segStart.date, end: data[i-1].date, count: i - data.indexOf(segStart) });
+      segStart = null;
+    }
+  });
+  if (segStart) abnormalSegs.push({ start: segStart.date, end: data[data.length-1].date, count: data.length - data.indexOf(segStart) });
+  result.abnormalPeriods = abnormalSegs;
+
+  // ========== PATTERN DETECTION ==========
+
+  // 1. Morning surge (晨峰高血压): morning SBP - night SBP > 35mmHg
+  if (periodStats.morning && periodStats.night) {
+    const surge = periodStats.morning.avgSys - periodStats.night.avgSys;
+    if (surge > 35) {
+      result.patterns.push({ id: 'morning_surge', severity: surge > 55 ? 'high' : 'mid', label: '晨峰高血压', detail: `晨起收缩压比夜间高${surge}mmHg（>35为异常）` });
+    }
+  }
+
+  // 2. Non-dipper pattern (非勺型): night SBP drop < 10% of daytime
+  if (periodStats.night && (periodStats.morning || periodStats.afternoon)) {
+    const dayAvg = periodStats.morning ? periodStats.morning.avgSys : periodStats.afternoon.avgSys;
+    const nightDrop = (dayAvg - periodStats.night.avgSys) / dayAvg * 100;
+    if (nightDrop < 10) {
+      result.patterns.push({ id: 'non_dipper', severity: nightDrop < 0 ? 'high' : 'mid', label: nightDrop < 0 ? '反勺型血压' : '非勺型血压', detail: `夜间收缩压下降仅${nightDrop.toFixed(1)}%（正常应>10%），增加靶器官损害风险` });
+    } else {
+      result.patterns.push({ id: 'dipper', severity: 'low', label: '勺型血压', detail: `夜间收缩压下降${nightDrop.toFixed(1)}%，节律正常` });
+    }
+  }
+
+  // 3. Isolated systolic hypertension (单纯收缩期高血压): sys≥140, dia<90
+  const ishCount = data.filter(r => r.systolic >= 140 && r.diastolic < 90).length;
+  if (ishCount > data.length * 0.3) {
+    result.patterns.push({ id: 'ish', severity: 'mid', label: '单纯收缩期高血压', detail: `${ishCount}次收缩压≥140但舒张压<90，常见于老年人，脉压差增大增加心血管风险` });
+  }
+
+  // 4. Wide pulse pressure (脉压差增大): sys-dia > 60
+  const widePP = data.filter(r => r.systolic - r.diastolic > 60).length;
+  if (widePP > data.length * 0.3) {
+    result.patterns.push({ id: 'wide_pp', severity: 'mid', label: '脉压差增大', detail: `${widePP}次脉压差>60mmHg，提示动脉硬化可能` });
+  }
+
+  // 5. Hypotension episodes (低血压事件)
+  const hypoCount = data.filter(r => r.systolic < 90 || r.diastolic < 60).length;
+  if (hypoCount > 0) {
+    result.patterns.push({ id: 'hypo', severity: hypoCount > 2 ? 'high' : 'mid', label: '低血压事件', detail: `发现${hypoCount}次低血压（收缩压<90或舒张压<60），注意体位性低血压可能` });
+  }
+
+  // 6. White coat hypertension suspicion (白大衣高血压): first readings high, later normal
+  if (data.length >= 6) {
+    const first3 = data.slice(0, 3);
+    const later = data.slice(3);
+    const firstAbn = first3.filter(isAbnormal).length / first3.length;
+    const laterAbn = later.filter(isAbnormal).length / later.length;
+    if (firstAbn > 0.6 && laterAbn < 0.3) {
+      result.patterns.push({ id: 'white_coat', severity: 'low', label: '疑似白大衣高血压', detail: '早期读数偏高、后续正常，可能为诊室/紧张导致一过性升高' });
+    }
+  }
+
+  // ========== ATRIAL FIBRILLATION DETECTION ==========
+
+  // 7. Irregular heart rate (心率不齐): high HRV suggests AFib
+  if (hrVals.length >= 5) {
+    const hrMean = avg(hrVals);
+    const hrSD = Math.sqrt(hrVals.reduce((s, v) => s + (v - hrMean) ** 2, 0) / hrVals.length);
+    const hrCV = hrSD / hrMean; // coefficient of variation
+
+    // Resting tachycardia
+    const tachyCount = hrVals.filter(v => v > 100).length;
+    if (tachyCount > hrVals.length * 0.3) {
+      result.afibIndicators.push({ label: '静息心动过速', detail: `${tachyCount}次心率>100bpm，房颤患者常见` });
+    }
+
+    // High HRV at rest - AFib hallmark
+    if (hrCV > 0.15 && hrMean > 70) {
+      result.afibIndicators.push({ label: '心率变异性增大', detail: `心率变异系数${(hrCV*100).toFixed(1)}%（>15%为异常），房颤特征性表现` });
+      result.patterns.push({ id: 'afib_hrv', severity: 'high', label: '⚠️ 疑似房颤', detail: `心率变异系数增大，伴均值${Math.round(hrMean)}bpm，建议心电图确诊` });
+    }
+
+    // Pulse deficit indicator (if HR varies >30bpm between consecutive readings)
+    let bigJumps = 0;
+    for (let i = 1; i < hrVals.length; i++) {
+      if (Math.abs(hrVals[i] - hrVals[i-1]) > 30) bigJumps++;
+    }
+    if (bigJumps > 1) {
+      result.afibIndicators.push({ label: '心率跳跃波动', detail: `${bigJumps}次相邻读数心率差>30bpm，提示心律不齐` });
+    }
+
+    // Bradycardia-tachycardia alternation
+    const bradyTachy = data.filter(r => r.heartRate > 0).some((r, i, arr) => {
+      if (i === 0) return false;
+      const prev = arr[i-1];
+      return (r.heartRate > 100 && prev.heartRate < 60) || (r.heartRate < 60 && prev.heartRate > 100);
+    });
+    if (bradyTachy) {
+      result.afibIndicators.push({ label: '快慢综合征', detail: '心动过速与过缓交替出现，快慢综合征是房颤的重要表现' });
+      result.patterns.push({ id: 'tachy_brady', severity: 'high', label: '⚠️ 快慢综合征', detail: '心率快慢交替，高度提示房颤伴慢快综合征' });
+    }
+  }
+
+  // ========== RISK LEVEL DETERMINATION ==========
+  const hasHighPattern = result.patterns.some(p => p.severity === 'high');
+  const hasMidPattern = result.patterns.some(p => p.severity === 'mid');
+
+  if (maxSys >= 180 || minDia >= 110 || abnormalRate > 0.7 || hasHighPattern) {
+    result.riskLevel = abnormalRate > 0.8 ? 'critical' : 'high';
+  } else if (abnormalRate > 0.3 || hasMidPattern) {
+    result.riskLevel = 'mid';
+  } else {
+    result.riskLevel = 'low';
+  }
+
+  const riskLabels = { low: '低风险', mid: '中风险', high: '高风险', critical: '极高风险' };
+  result.riskLabel = riskLabels[result.riskLevel];
+
+  // ========== URGENT ALERTS ==========
+  if (maxSys >= 180) {
+    result.urgentAlerts.push('收缩压≥180mmHg，属高血压急症，请立即就医！');
+  }
+  if (minDia >= 110) {
+    result.urgentAlerts.push('舒张压≥110mmHg，属3级高血压，需紧急降压处理');
+  }
+  if (data.some(r => r.systolic < 90 && r.diastolic < 60)) {
+    result.urgentAlerts.push('出现严重低血压（收缩压<90且舒张压<60），注意休克风险');
+  }
+  if (result.patterns.some(p => p.id === 'afib_hrv' || p.id === 'tachy_brady')) {
+    result.urgentAlerts.push('疑似心房颤动，请尽快做12导联心电图确诊，房颤增加5倍卒中风险');
+  }
+
+  // ========== MEDICAL ADVICE ENGINE ==========
+  const advice = [];
+
+  // General hypertension advice
+  if (avgSys >= 140 || avgDia >= 90) {
+    advice.push({ icon: '💊', text: '<strong>降压治疗</strong>：平均血压未达标，建议规律服用降压药，优先选择长效制剂（如氨氯地平、缬沙坦），每日一次，平稳控压24小时' });
+  }
+
+  // Morning surge advice
+  if (result.patterns.some(p => p.id === 'morning_surge')) {
+    advice.push({ icon: '🌅', text: '<strong>晨峰高血压</strong>：建议清晨起床后先在床边坐2-3分钟再活动；降压药调整为睡前服用，或使用长效制剂覆盖晨峰时段；避免晨起剧烈运动' });
+  }
+
+  // Non-dipper advice
+  if (result.patterns.some(p => p.id === 'non_dipper')) {
+    advice.push({ icon: '🌙', text: '<strong>非勺型/反勺型血压</strong>：夜间血压未正常下降，增加心脑肾损害风险。建议：①考虑睡前服用降压药 ②限制晚间盐摄入 ③排查睡眠呼吸暂停综合征' });
+  }
+
+  // AFib advice
+  if (result.afibIndicators.length > 0) {
+    advice.push({ icon: '💓', text: '<strong>房颤管理</strong>：①尽快做心电图确诊 ②确诊后需评估卒中风险（CHA₂DS₂-VASc评分） ③高危患者需抗凝治疗（华法林或新型口服抗凝药） ④心率控制目标：静息<110bpm（宽松）或<80bpm（严格） ⑤避免饮酒、咖啡等诱因' });
+    advice.push({ icon: '🩸', text: '<strong>房颤抗凝提醒</strong>：房颤患者卒中风险是正常人5倍。如有以下任一条件需抗凝：心衰、高血压、年龄≥75岁、糖尿病、既往卒中/TIA。勿仅靠阿司匹林，需使用华法林或NOAC（利伐沙班/达比加群/阿哌沙班）' });
+  }
+
+  // ISH advice
+  if (result.patterns.some(p => p.id === 'ish')) {
+    advice.push({ icon: '👴', text: '<strong>单纯收缩期高血压</strong>：舒张压正常但收缩压高，常见于老年动脉硬化。首选CCB（氨氯地平）或噻嗪类利尿剂，避免舒张压过度降低（<60mmHg增加冠心病风险）' });
+  }
+
+  // Wide pulse pressure
+  if (result.patterns.some(p => p.id === 'wide_pp')) {
+    advice.push({ icon: '🫀', text: '<strong>脉压差增大</strong>：脉压差>60mmHg提示大动脉硬化。建议：①检查颈动脉超声 ②评估心血管风险 ③选择兼顾降收缩压和保舒张压的药物' });
+  }
+
+  // Hypotension advice
+  if (result.patterns.some(p => p.id === 'hypo')) {
+    advice.push({ icon: '⚠️', text: '<strong>低血压处理</strong>：注意体位性低血压——起床/站立时慢起慢站；如服降压药，需考虑减量；保证充分水化；排除其他原因（心律失常、贫血、感染）' });
+  }
+
+  // Lifestyle advice for all hypertensive patients
+  if (avgSys >= 130) {
+    advice.push({ icon: '🧂', text: '<strong>限盐饮食</strong>：每日钠盐<5g（约一啤酒瓶盖），减少加工食品、酱油、腌制食品摄入。DASH饮食：多蔬果、全谷物、低脂乳制品、坚果' });
+    advice.push({ icon: '🏃', text: '<strong>规律运动</strong>：每周150分钟中等强度有氧运动（快走、游泳、骑车），避免剧烈竞技运动。运动时心率不超过(220-年龄)×0.7' });
+    advice.push({ icon: '⚖️', text: '<strong>体重管理</strong>：BMI控制在18.5-24，腰围男<90cm女<85cm。每减重1kg约降压1mmHg' });
+  }
+
+  // White coat advice
+  if (result.patterns.some(p => p.id === 'white_coat')) {
+    advice.push({ icon: '🤍', text: '<strong>白大衣高血压</strong>：诊室血压偏高但日常正常，建议家庭自测血压或24小时动态血压监测确诊，避免过度治疗' });
+  }
+
+  // ========== NEXT MONITORING SCHEDULE ==========
+  if (result.riskLevel === 'critical' || result.riskLevel === 'high') {
+    result.nextMonitor = '建议立即就医，稳定后每日早晚各测1次（晨起排尿后、睡前），连续7天';
+  } else if (result.riskLevel === 'mid') {
+    result.nextMonitor = '建议每日早晚各测1次（晨起排尿后、睡前），连续7天后评估，规律复诊';
+  } else {
+    result.nextMonitor = '血压控制良好，建议每周至少测3天（早晚各1次），继续保持健康生活方式';
+  }
+
+  // AFib-specific monitoring
+  if (result.afibIndicators.length > 0) {
+    result.nextMonitor += '。房颤患者：每次测量同时摸脉搏30秒，对比心率与脉率是否一致（脉率短缺提示房颤）';
+  }
+
+  result.advice = advice;
+  return result;
+}
+
+function avg(arr) {
+  return arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : 0;
+}
+
+// === RENDER DOCTOR REPORT ===
+function renderDoctorReport(a) {
+  const periodNames = { morning: '晨间(6-12)', afternoon: '午后(12-18)', evening: '晚间(18-22)', night: '夜间(22-6)' };
+  const periodColors = { morning: 'var(--danger-light)', afternoon: 'var(--warning-light)', evening: 'var(--primary-light)', night: '#1e1e3a' };
+
+  let html = '';
+
+  // Urgent alerts
+  if (a.urgentAlerts.length > 0) {
+    html += '<div class="urgent-card"><h3>🚨 紧急提醒</h3>';
+    a.urgentAlerts.forEach(alert => { html += `<p>• ${alert}</p>`; });
+    html += '</div>';
+  }
+
+  // Risk level
+  html += '<div class="card"><div class="card-title">🎯 综合风险评估</div>';
+  html += `<div style="text-align:center;padding:8px 0"><span class="risk-badge risk-${a.riskLevel}">${a.riskLabel}</span></div>`;
+  html += `<div style="font-size:12px;color:var(--text-secondary);text-align:center">基于${records.length}条记录分析</div></div>`;
+
+  // Detected patterns
+  if (a.patterns.length > 0) {
+    html += '<div class="card"><div class="card-title">🔍 识别的模式</div>';
+    a.patterns.forEach(p => {
+      const cls = p.severity === 'high' ? 'pattern-warn' : p.severity === 'mid' ? 'pattern-info' : 'pattern-good';
+      html += `<div style="margin-bottom:10px"><span class="pattern-tag ${cls}">${p.label}</span>`;
+      html += `<div style="font-size:12px;color:var(--text-secondary);margin-top:4px;line-height:1.5">${p.detail}</div></div>`;
+    });
+    html += '</div>';
+  }
+
+  // Time period summary
+  html += '<div class="card"><div class="card-title">⏰ 时段血压汇总</div><div class="period-grid">';
+  for (const [k, name] of Object.entries(periodNames)) {
+    const s = a.periodSummary[k];
+    if (!s) continue;
+    const abColor = s.abnormalRate > 50 ? 'var(--danger-light)' : s.abnormalRate > 20 ? 'var(--warning-light)' : 'var(--success-light)';
+    html += `<div class="period-item" style="background:${abColor}"><div class="p-label">${name}</div>`;
+    html += `<div class="p-value">${s.avgSys}/${s.avgDia}</div>`;
+    html += `<div class="p-sub">心率${s.avgHR || '--'} · 异常${s.abnormalRate}%</div></div>`;
+  }
+  html += '</div></div>';
+
+  // Abnormal periods
+  if (a.abnormalPeriods.length > 0) {
+    html += '<div class="card"><div class="card-title">⚠️ 异常时段</div>';
+    a.abnormalPeriods.forEach(seg => {
+      const s = fmtShort(seg.start), e = fmtShort(seg.end);
+      html += `<div style="font-size:13px;margin-bottom:6px"><span style="color:var(--danger);font-weight:600">${s} → ${e}</span> <span style="color:var(--text-secondary)">（${seg.count}条异常）</span></div>`;
+    });
+    html += '</div>';
+  }
+
+  // AFib indicators
+  if (a.afibIndicators.length > 0) {
+    html += '<div class="card"><div class="card-title">🫀 房颤相关指标</div>';
+    a.afibIndicators.forEach(ind => {
+      html += `<div style="margin-bottom:8px"><strong style="color:var(--danger)">${ind.label}</strong><div style="font-size:12px;color:var(--text-secondary);line-height:1.5">${ind.detail}</div></div>`;
+    });
+    html += '</div>';
+  }
+
+  // Medical advice
+  if (a.advice.length > 0) {
+    html += '<div class="card"><div class="card-title">📋 医学建议</div>';
+    a.advice.forEach(ad => {
+      html += `<div class="advice-item"><span class="advice-icon">${ad.icon}</span>${ad.text}</div>`;
+    });
+    html += '</div>';
+  }
+
+  // Next monitoring schedule
+  html += `<div class="card"><div class="card-title">📅 下次监测建议</div><div style="font-size:13px;line-height:1.7;color:var(--text)">${a.nextMonitor}</div></div>`;
+
+  // Disclaimer
+  html += '<div class="card" style="background:var(--warning-light);border-color:var(--warning)"><div style="font-size:12px;color:var(--warning);line-height:1.5"><strong>⚠️ 免责声明</strong>：本分析基于家庭自测数据，仅供健康管理参考，不替代医生诊断。房颤确诊需心电图，高血压治疗方案需遵医嘱。如有不适请立即就医。</div></div>';
+
+  return html;
+}
+
+function fmtShort(iso) {
+  const d = new Date(iso);
+  return `${(d.getMonth()+1).toString().padStart(2,'0')}/${d.getDate().toString().padStart(2,'0')} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
 }
 
 // Init
