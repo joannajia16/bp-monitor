@@ -732,6 +732,15 @@ body {
         <button class="btn btn-outline" onclick="exportCSV()" style="flex:1;border-style:solid">📄 导出CSV</button>
         <button class="btn btn-outline" onclick="exportExcel()" style="flex:1;border-style:solid">📊 导出Excel</button>
       </div>
+      <div class="card" style="margin-top:10px;padding:12px 16px;border:2px dashed var(--primary)">
+        <div style="font-size:13px;font-weight:600;margin-bottom:8px">💾 数据备份与恢复</div>
+        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;line-height:1.5">换手机时：旧手机备份 → 转移文件 → 新手机恢复</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary" onclick="backupData()" style="flex:1;font-size:13px;padding:9px">☁️ 备份数据</button>
+          <button class="btn btn-outline" onclick="document.getElementById('restoreFile').click()" style="flex:1;font-size:13px;padding:9px;border-style:solid">📥 恢复数据</button>
+          <input type="file" id="restoreFile" accept=".json" onchange="restoreData(event)" style="display:none">
+        </div>
+      </div>
       <button class="btn btn-danger" onclick="clearAll()" style="margin-top:8px" id="clearBtn">🗑 清空所有数据</button>
     </div>
   </div>
@@ -1610,6 +1619,69 @@ function exportExcel() {
   XLSX.utils.book_append_sheet(wb, ws, '血压记录');
   XLSX.writeFile(wb, `血压记录_${new Date().toISOString().slice(0,10)}.xlsx`);
   showToast('✅ Excel已导出');
+}
+
+// === Backup & Restore ===
+function backupData() {
+  if (records.length === 0) return showToast('暂无数据可备份');
+  const backup = {
+    version: 1,
+    app: '血压心率管家',
+    exportDate: new Date().toISOString(),
+    recordCount: records.length,
+    records: records
+  };
+  const json = JSON.stringify(backup, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `血压管家备份_${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  showToast(`✅ 已备份${records.length}条数据`);
+}
+
+function restoreData(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(ev) {
+    try {
+      const backup = JSON.parse(ev.target.result);
+      // Validate
+      if (!backup.records || !Array.isArray(backup.records)) {
+        return showToast('❌ 无效的备份文件');
+      }
+      // Validate each record
+      const valid = backup.records.every(r =>
+        r.id && r.date && r.systolic && r.diastolic && typeof r.heartRate === 'number'
+      );
+      if (!valid) {
+        return showToast('❌ 备份数据格式异常');
+      }
+
+      const incomingCount = backup.records.length;
+      const msg = `检测到 <strong>${incomingCount}条</strong> 备份数据<br><span style="color:var(--text-secondary);font-size:13px">当前已有${records.length}条数据，备份将<strong>合并</strong>（自动去重）</span>`;
+
+      showConfirm('📥', msg, '恢复', 'confirm-ok-primary', () => {
+        // Merge: add new records, skip duplicates by id
+        const existingIds = new Set(records.map(r => r.id));
+        let added = 0;
+        backup.records.forEach(r => {
+          if (!existingIds.has(r.id)) {
+            records.push(r);
+            added++;
+          }
+        });
+        save();
+        refreshRecords();
+        showToast(`✅ 恢复成功，新增${added}条`);
+      });
+    } catch (err) {
+      showToast('❌ 文件解析失败');
+    }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
 }
 
 // === Toast ===
