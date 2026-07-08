@@ -11,6 +11,8 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
 <style>
 :root {
   --primary: #2563eb;
@@ -417,6 +419,61 @@ body {
   .risk-critical { background: #7f1d1d; color: #fca5a5; }
   .urgent-card { background: linear-gradient(135deg, #7f1d1d, #991b1b); color: #fef2f2; }
 }
+
+/* Month nav */
+.month-nav {
+  background: var(--primary-light);
+  color: var(--primary);
+  border: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 14px;
+  cursor: pointer;
+  font-weight: 700;
+}
+.month-nav:active { background: var(--primary); color: white; }
+
+/* Stat items clickable */
+.stat-item { cursor: pointer; transition: transform 0.15s; }
+.stat-item:active { transform: scale(0.96); }
+
+/* Drill-down */
+.drill-close {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.drill-close:hover { background: var(--danger-light); color: var(--danger); }
+.drill-content { max-height: 280px; overflow-y: auto; }
+.drill-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.drill-row:last-child { border-bottom: none; }
+.drill-row .drill-date { color: var(--text-secondary); font-size: 12px; }
+.drill-row .drill-vals { display: flex; gap: 10px; font-weight: 600; }
+.drill-row.drill-highlight { background: var(--danger-light); margin: 0 -16px; padding: 8px 16px; border-radius: 4px; }
+
+/* Zoom button */
+.zoom-btn {
+  background: var(--primary-light);
+  color: var(--primary);
+  border: none;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.zoom-btn:active { background: var(--primary); color: white; }
 </style>
 </head>
 <body>
@@ -502,36 +559,57 @@ body {
 
   <!-- Analysis Panel -->
   <div class="panel" id="panel-analysis">
+    <!-- Month selector -->
+    <div class="card" id="monthCard" style="display:none;padding:10px 16px">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <button class="month-nav" onclick="changeMonth(-1)">◀</button>
+        <span id="monthLabel" style="font-weight:600;font-size:15px" onclick="resetMonthFilter()"></span>
+        <button class="month-nav" onclick="changeMonth(1)">▶</button>
+      </div>
+    </div>
+
     <div class="card" id="statsCard" style="display:none">
-      <div class="card-title">📊 数据概览</div>
+      <div class="card-title">📊 数据概览 <span style="font-size:11px;color:var(--text-secondary)">（点击查看详情）</span></div>
       <div class="stats-grid">
-        <div class="stat-item stat-sys">
+        <div class="stat-item stat-sys" onclick="drillDown('sys')">
           <div class="stat-value" id="avgSys">--</div>
-          <div class="stat-label">平均收缩压</div>
+          <div class="stat-label">平均收缩压 ▸</div>
         </div>
-        <div class="stat-item stat-dia">
+        <div class="stat-item stat-dia" onclick="drillDown('dia')">
           <div class="stat-value" id="avgDia">--</div>
-          <div class="stat-label">平均舒张压</div>
+          <div class="stat-label">平均舒张压 ▸</div>
         </div>
-        <div class="stat-item stat-hr">
+        <div class="stat-item stat-hr" onclick="drillDown('hr')">
           <div class="stat-value" id="avgHR">--</div>
-          <div class="stat-label">平均心率</div>
+          <div class="stat-label">平均心率 ▸</div>
         </div>
-        <div class="stat-item stat-abnormal">
+        <div class="stat-item stat-abnormal" onclick="drillDown('abnormal')">
           <div class="stat-value" id="abnormalRate">--</div>
-          <div class="stat-label">异常比例</div>
+          <div class="stat-label">异常数据 ▸</div>
         </div>
       </div>
     </div>
 
+    <!-- Drill-down detail panel -->
+    <div class="card" id="drillCard" style="display:none">
+      <div class="card-title"><span id="drillTitle"></span> <span class="drill-close" onclick="closeDrillDown()">✕</span></div>
+      <div id="drillContent" class="drill-content"></div>
+    </div>
+
     <div class="card" id="chartCard" style="display:none">
-      <div class="card-title">📈 血压趋势</div>
-      <div class="chart-container"><canvas id="bpChart"></canvas></div>
+      <div class="card-title">📈 血压趋势 <span style="font-size:11px;color:var(--text-secondary)">双指缩放 · 单指拖动</span></div>
+      <div class="chart-container" style="height:260px"><canvas id="bpChart"></canvas></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="zoom-btn" onclick="resetZoom('bp')">重置视图</button>
+      </div>
     </div>
 
     <div class="card" id="hrChartCard" style="display:none">
-      <div class="card-title">💓 心率趋势</div>
-      <div class="chart-container"><canvas id="hrChart"></canvas></div>
+      <div class="card-title">💓 心率趋势 <span style="font-size:11px;color:var(--text-secondary)">双指缩放 · 单指拖动</span></div>
+      <div class="chart-container" style="height:260px"><canvas id="hrChart"></canvas></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="zoom-btn" onclick="resetZoom('hr')">重置视图</button>
+      </div>
     </div>
 
     <div class="empty" id="analysisEmpty">
@@ -984,37 +1062,152 @@ function classifyBP(sys, dia) {
   return '3级高血压';
 }
 
-// === Refresh Analysis ===
+// === Refresh Analysis (with month filter + zoom + drill-down) ===
+let currentMonth = null; // null = all, or 'YYYY-MM'
+
+function getFilteredRecords() {
+  if (!currentMonth) return [...records];
+  return records.filter(r => {
+    const d = new Date(r.date);
+    const key = `${d.getFullYear()}-${(d.getMonth()+1).toString().padStart(2,'0')}`;
+    return key === currentMonth;
+  });
+}
+
+function getAvailableMonths() {
+  const months = new Set();
+  records.forEach(r => {
+    const d = new Date(r.date);
+    months.add(`${d.getFullYear()}-${(d.getMonth()+1).toString().padStart(2,'0')}`);
+  });
+  return [...months].sort();
+}
+
+function changeMonth(dir) {
+  const months = getAvailableMonths();
+  if (months.length === 0) return;
+  if (!currentMonth) {
+    currentMonth = dir > 0 ? months[0] : months[months.length - 1];
+  } else {
+    const idx = months.indexOf(currentMonth);
+    const next = idx + dir;
+    if (next < 0 || next >= months.length) { currentMonth = null; }
+    else { currentMonth = months[next]; }
+  }
+  closeDrillDown();
+  refreshAnalysis();
+}
+
+function resetMonthFilter() {
+  currentMonth = null;
+  closeDrillDown();
+  refreshAnalysis();
+}
+
+function updateMonthLabel() {
+  const label = document.getElementById('monthLabel');
+  if (!currentMonth) {
+    label.textContent = '全部数据 ▾';
+  } else {
+    const [y, m] = currentMonth.split('-');
+    label.textContent = `${y}年${parseInt(m)}月 ▾`;
+  }
+}
+
+function resetZoom(chart) {
+  if (chart === 'bp' && bpChartInstance) bpChartInstance.resetZoom();
+  if (chart === 'hr' && hrChartInstance) hrChartInstance.resetZoom();
+}
+
+// === Drill-down ===
+function drillDown(type) {
+  const filtered = getFilteredRecords().sort((a, b) => new Date(b.date) - new Date(a.date));
+  const card = document.getElementById('drillCard');
+  const title = document.getElementById('drillTitle');
+  const content = document.getElementById('drillContent');
+
+  let items = [];
+  let titleText = '';
+
+  if (type === 'sys') {
+    titleText = '📈 收缩压详情';
+    items = filtered.map(r => ({ r, highlight: r.systolic >= 140, main: r.systolic, unit: 'mmHg', label: r.systolic >= 140 ? '偏高' : '正常' }));
+  } else if (type === 'dia') {
+    titleText = '📈 舒张压详情';
+    items = filtered.map(r => ({ r, highlight: r.diastolic >= 90, main: r.diastolic, unit: 'mmHg', label: r.diastolic >= 90 ? '偏高' : '正常' }));
+  } else if (type === 'hr') {
+    titleText = '💓 心率详情';
+    items = filtered.map(r => ({ r, highlight: r.heartRate > 100 || r.heartRate < 60, main: r.heartRate, unit: 'bpm', label: r.heartRate > 100 ? '过速' : r.heartRate < 60 ? '过缓' : '正常' }));
+  } else if (type === 'abnormal') {
+    titleText = '⚠️ 异常数据清单';
+    items = filtered.filter(r => isAbnormal(r)).map(r => ({ r, highlight: true, main: `${r.systolic}/${r.diastolic}`, unit: '', label: classifyBP(r.systolic, r.diastolic) }));
+    if (items.length === 0) {
+      titleText = '✅ 无异常数据';
+    }
+  }
+
+  title.textContent = titleText;
+  if (items.length === 0 && type === 'abnormal') {
+    content.innerHTML = '<div style="text-align:center;padding:16px;color:var(--success)">所有数据均在正常范围内 🎉</div>';
+  } else {
+    content.innerHTML = items.map(item => {
+      const d = new Date(item.r.date);
+      const dateStr = `${(d.getMonth()+1).toString().padStart(2,'0')}/${d.getDate().toString().padStart(2,'0')} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+      return `<div class="drill-row ${item.highlight ? 'drill-highlight' : ''}">
+        <div><div class="drill-date">${dateStr}</div><span class="badge ${item.highlight ? 'badge-warn' : 'badge-ok'}">${item.label}</span></div>
+        <div class="drill-vals"><span style="color:${item.highlight ? 'var(--danger)' : 'var(--text)'}">${item.main}</span><span style="color:var(--text-secondary);font-weight:400;font-size:11px">${item.unit}</span></div>
+      </div>`;
+    }).join('');
+  }
+
+  card.style.display = '';
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function closeDrillDown() {
+  document.getElementById('drillCard').style.display = 'none';
+}
+
 function refreshAnalysis() {
   const empty = document.getElementById('analysisEmpty');
   const statsCard = document.getElementById('statsCard');
   const chartCard = document.getElementById('chartCard');
   const hrChartCard = document.getElementById('hrChartCard');
+  const monthCard = document.getElementById('monthCard');
 
-  if (records.length === 0) {
+  const filtered = getFilteredRecords();
+
+  if (filtered.length === 0) {
     empty.style.display = '';
     statsCard.style.display = 'none';
     chartCard.style.display = 'none';
     hrChartCard.style.display = 'none';
+    monthCard.style.display = records.length > 0 ? '' : 'none';
+    updateMonthLabel();
     return;
   }
+
   empty.style.display = 'none';
   statsCard.style.display = '';
   chartCard.style.display = '';
   hrChartCard.style.display = '';
+  monthCard.style.display = '';
+  updateMonthLabel();
+  closeDrillDown();
 
-  const sorted = [...records].sort((a, b) => new Date(a.date) - new Date(b.date));
+  const sorted = [...filtered].sort((a, b) => new Date(a.date) - new Date(b.date));
   const avgSys = Math.round(sorted.reduce((s, r) => s + r.systolic, 0) / sorted.length);
   const avgDia = Math.round(sorted.reduce((s, r) => s + r.diastolic, 0) / sorted.length);
-  const avgHR = Math.round(sorted.reduce((s, r) => s + r.heartRate, 0) / sorted.length);
+  const hrArr = sorted.map(r => r.heartRate).filter(v => v > 0);
+  const avgHR = hrArr.length > 0 ? Math.round(hrArr.reduce((s, v) => s + v, 0) / hrArr.length) : 0;
   const abnormal = sorted.filter(isAbnormal).length;
 
   document.getElementById('avgSys').textContent = avgSys;
   document.getElementById('avgDia').textContent = avgDia;
-  document.getElementById('avgHR').textContent = avgHR;
+  document.getElementById('avgHR').textContent = avgHR || '--';
   document.getElementById('abnormalRate').textContent = Math.round(abnormal / sorted.length * 100) + '%';
 
-  // Blood Pressure Chart
+  // Chart colors
   const chartColor = getComputedStyle(document.documentElement).getPropertyValue('--text').trim();
   const gridColor = getComputedStyle(document.documentElement).getPropertyValue('--border').trim();
   const commonScales = {
@@ -1026,6 +1219,21 @@ function refreshAnalysis() {
     }
   };
 
+  // Zoom plugin options
+  const zoomOpts = {
+    zoom: {
+      wheel: { enabled: true },
+      pinch: { enabled: true },
+      mode: 'x',
+    },
+    pan: {
+      enabled: true,
+      mode: 'x',
+    },
+    limits: { x: { min: new Date(sorted[0].date), max: new Date(sorted[sorted.length-1].date) } }
+  };
+
+  // Blood Pressure Chart
   if (bpChartInstance) bpChartInstance.destroy();
   bpChartInstance = new Chart(document.getElementById('bpChart'), {
     type: 'line',
@@ -1058,7 +1266,7 @@ function refreshAnalysis() {
       maintainAspectRatio: false,
       plugins: {
         legend: { labels: { color: chartColor } },
-        annotation: {}
+        zoom: zoomOpts
       },
       scales: {
         ...commonScales,
@@ -1091,7 +1299,8 @@ function refreshAnalysis() {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
-        legend: { labels: { color: chartColor } }
+        legend: { labels: { color: chartColor } },
+        zoom: zoomOpts
       },
       scales: {
         ...commonScales,
