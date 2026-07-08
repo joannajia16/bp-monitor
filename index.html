@@ -474,6 +474,93 @@ body {
   cursor: pointer;
 }
 .zoom-btn:active { background: var(--primary); color: white; }
+
+/* Confirm modal */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.confirm-overlay.hidden { display: none; }
+.confirm-box {
+  background: var(--card);
+  border-radius: 16px;
+  padding: 24px;
+  max-width: 320px;
+  width: 100%;
+  text-align: center;
+  color: var(--text);
+}
+.confirm-box .confirm-icon { font-size: 36px; margin-bottom: 8px; }
+.confirm-box .confirm-msg { font-size: 15px; line-height: 1.6; margin-bottom: 20px; }
+.confirm-btns { display: flex; gap: 10px; }
+.confirm-btns button {
+  flex: 1;
+  padding: 10px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.confirm-cancel { background: var(--bg); color: var(--text-secondary); border: 1px solid var(--border) !important; }
+.confirm-ok { background: var(--danger); color: white; }
+.confirm-ok-primary { background: var(--primary); color: white; }
+
+/* Edit modal */
+.edit-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 2000;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.edit-overlay.hidden { display: none; }
+.edit-box {
+  background: var(--card);
+  border-radius: 20px 20px 0 0;
+  padding: 20px 16px 28px;
+  max-width: 480px;
+  width: 100%;
+  color: var(--text);
+}
+.edit-box .edit-handle {
+  width: 36px;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  margin: 0 auto 16px;
+}
+.edit-box .edit-title {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 16px;
+  text-align: center;
+}
+.edit-box .form-row { margin-bottom: 10px; }
+.edit-box .form-group { margin-bottom: 10px; }
+.edit-box .btn-row { display: flex; gap: 10px; margin-top: 16px; }
+.edit-box .btn-row button { flex: 1; }
+
+/* Record actions */
+.rec-actions { display: flex; gap: 4px; align-items: center; }
+.edit-btn {
+  background: none;
+  border: none;
+  color: var(--primary);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+.edit-btn:active { background: var(--primary-light); }
 </style>
 </head>
 <body>
@@ -640,7 +727,13 @@ body {
         </div>
       </div>
     </div>
-    <button class="btn btn-danger" onclick="clearAll()" style="margin-top:8px" id="clearBtn" style="display:none">🗑 清空所有数据</button>
+    <div id="exportBtns" style="display:none;margin-top:8px">
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-outline" onclick="exportCSV()" style="flex:1;border-style:solid">📄 导出CSV</button>
+        <button class="btn btn-outline" onclick="exportExcel()" style="flex:1;border-style:solid">📊 导出Excel</button>
+      </div>
+      <button class="btn btn-danger" onclick="clearAll()" style="margin-top:8px" id="clearBtn">🗑 清空所有数据</button>
+    </div>
   </div>
 
   <!-- Guide Panel -->
@@ -680,6 +773,48 @@ body {
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- Confirm Modal -->
+<div id="confirmOverlay" class="confirm-overlay hidden">
+  <div class="confirm-box">
+    <div class="confirm-icon" id="confirmIcon">🗑️</div>
+    <div class="confirm-msg" id="confirmMsg">确定删除？</div>
+    <div class="confirm-btns">
+      <button class="confirm-cancel" onclick="confirmCancel()">取消</button>
+      <button class="confirm-ok" id="confirmOk" onclick="confirmOk()">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Modal -->
+<div id="editOverlay" class="edit-overlay hidden">
+  <div class="edit-box">
+    <div class="edit-handle"></div>
+    <div class="edit-title">✏️ 修改记录</div>
+    <div class="form-group full">
+      <label>日期时间</label>
+      <input type="datetime-local" id="editDate">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>收缩压 (mmHg)</label>
+        <input type="number" id="editSys" min="60" max="260">
+      </div>
+      <div class="form-group">
+        <label>舒张压 (mmHg)</label>
+        <input type="number" id="editDia" min="30" max="160">
+      </div>
+    </div>
+    <div class="form-group full">
+      <label>心率 (bpm)</label>
+      <input type="number" id="editHR" min="30" max="220">
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-outline" onclick="closeEditModal()" style="border-style:solid">取消</button>
+      <button class="btn btn-primary" onclick="saveEdit()">保存</button>
+    </div>
+  </div>
+</div>
 
 <script>
 // === Data Layer ===
@@ -1025,21 +1160,96 @@ function downloadTemplate() {
   a.click();
 }
 
-// === Delete Record ===
-function deleteRecord(id) {
-  records = records.filter(r => r.id !== id);
-  save();
-  refreshRecords();
-  showToast('已删除');
+// === Confirm Modal ===
+let confirmCallback = null;
+
+function showConfirm(icon, msg, okText, okClass, callback) {
+  confirmCallback = callback;
+  const overlay = document.getElementById('confirmOverlay');
+  document.getElementById('confirmIcon').textContent = icon;
+  document.getElementById('confirmMsg').innerHTML = msg;
+  const okBtn = document.getElementById('confirmOk');
+  okBtn.textContent = okText;
+  okBtn.className = okClass || 'confirm-ok';
+  overlay.classList.remove('hidden');
+}
+
+function confirmCancel() {
+  document.getElementById('confirmOverlay').classList.add('hidden');
+  confirmCallback = null;
+}
+
+function confirmOk() {
+  document.getElementById('confirmOverlay').classList.add('hidden');
+  if (confirmCallback) confirmCallback();
+  confirmCallback = null;
+}
+
+// === Delete Record (with confirm) ===
+function confirmDelete(id) {
+  const r = records.find(r => r.id === id);
+  if (!r) return;
+  const d = new Date(r.date);
+  const dateStr = `${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:${d.getMinutes().toString().padStart(2,'0')}`;
+  showConfirm('🗑️', `确定删除这条记录？<br><span style="color:var(--text-secondary);font-size:13px">${dateStr}　${r.systolic}/${r.diastolic}　心率${r.heartRate}</span>`, '删除', 'confirm-ok', () => {
+    records = records.filter(r => r.id !== id);
+    save();
+    refreshRecords();
+    showToast('已删除');
+  });
+}
+
+// === Edit Record ===
+function openEditModal(id) {
+  const r = records.find(r => r.id === id);
+  if (!r) return;
+  const d = new Date(r.date);
+  const offset = d.getTimezoneOffset() * 60000;
+  const local = new Date(d - offset).toISOString().slice(0, 16);
+  document.getElementById('editDate').value = local;
+  document.getElementById('editSys').value = r.systolic;
+  document.getElementById('editDia').value = r.diastolic;
+  document.getElementById('editHR').value = r.heartRate;
+  document.getElementById('editOverlay').classList.remove('hidden');
+  document.getElementById('editOverlay').dataset.recordId = id;
+}
+
+function closeEditModal() {
+  document.getElementById('editOverlay').classList.add('hidden');
+}
+
+function saveEdit() {
+  const id = parseInt(document.getElementById('editOverlay').dataset.recordId);
+  const date = document.getElementById('editDate').value;
+  const sys = parseInt(document.getElementById('editSys').value);
+  const dia = parseInt(document.getElementById('editDia').value);
+  const hr = parseInt(document.getElementById('editHR').value);
+
+  if (!date) return showToast('请选择日期');
+  if (!sys || sys < 60 || sys > 260) return showToast('收缩压范围：60-260');
+  if (!dia || dia < 30 || dia > 160) return showToast('舒张压范围：30-160');
+  if (!hr || hr < 30 || hr > 220) return showToast('心率范围：30-220');
+  if (sys <= dia) return showToast('收缩压应大于舒张压');
+
+  showConfirm('✏️', `确定保存修改？<br><span style="color:var(--text-secondary);font-size:13px">${sys}/${dia}　心率${hr}</span>`, '保存', 'confirm-ok-primary', () => {
+    const idx = records.findIndex(r => r.id === id);
+    if (idx < 0) return;
+    records[idx] = { ...records[idx], date: new Date(date).toISOString(), systolic: sys, diastolic: dia, heartRate: hr };
+    save();
+    refreshRecords();
+    closeEditModal();
+    showToast('✅ 已修改');
+  });
 }
 
 // === Clear All ===
 function clearAll() {
-  if (!confirm('确定清空所有数据？此操作不可恢复')) return;
-  records = [];
-  save();
-  refreshRecords();
-  showToast('已清空');
+  showConfirm('⚠️', '确定清空所有数据？<br><span style="color:var(--text-secondary);font-size:13px">此操作不可恢复</span>', '清空', 'confirm-ok', () => {
+    records = [];
+    save();
+    refreshRecords();
+    showToast('已清空');
+  });
 }
 
 // === Save ===
@@ -1323,11 +1533,11 @@ function refreshRecords() {
   if (records.length === 0) {
     list.innerHTML = '<div class="empty"><div class="icon">📝</div><div>暂无记录</div></div>';
     count.textContent = '';
-    clearBtn.style.display = 'none';
+    document.getElementById('exportBtns').style.display = 'none';
     return;
   }
 
-  clearBtn.style.display = '';
+  document.getElementById('exportBtns').style.display = '';
   count.textContent = `(${records.length}条)`;
   const sorted = [...records].sort((a, b) => new Date(b.date) - new Date(a.date));
   list.innerHTML = sorted.map(r => {
@@ -1344,10 +1554,62 @@ function refreshRecords() {
         <span style="color:var(--danger)">${r.systolic}</span>
         <span style="color:var(--primary)">${r.diastolic}</span>
         <span style="color:var(--warning)">${r.heartRate}</span>
-        <button class="del-btn" onclick="deleteRecord(${r.id})">✕</button>
+        <div class="rec-actions">
+          <button class="edit-btn" onclick="openEditModal(${r.id})">✏️</button>
+          <button class="del-btn" onclick="confirmDelete(${r.id})">✕</button>
+        </div>
       </div>
     </div>`;
   }).join('');
+}
+
+// === Export Functions ===
+function fmtExportDate(iso) {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${(d.getMonth()+1).toString().padStart(2,'0')}-${d.getDate().toString().padStart(2,'0')} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+}
+
+function exportCSV() {
+  if (records.length === 0) return showToast('暂无数据');
+  const sorted = [...records].sort((a, b) => new Date(a.date) - new Date(b.date));
+  const header = '日期,收缩压(mmHg),舒张压(mmHg),心率(bpm),分类,是否异常';
+  const rows = sorted.map(r => {
+    const cls = classifyBP(r.systolic, r.diastolic);
+    const ab = isAbnormal(r) ? '是' : '否';
+    return `${fmtExportDate(r.date)},${r.systolic},${r.diastolic},${r.heartRate},${cls},${ab}`;
+  });
+  const csv = '\uFEFF' + header + '\n' + rows.join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `血压记录_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  showToast('✅ CSV已导出');
+}
+
+function exportExcel() {
+  if (records.length === 0) return showToast('暂无数据');
+  const sorted = [...records].sort((a, b) => new Date(a.date) - new Date(b.date));
+  const wsData = [
+    ['日期', '收缩压(mmHg)', '舒张压(mmHg)', '心率(bpm)', '分类', '是否异常']
+  ];
+  sorted.forEach(r => {
+    wsData.push([
+      fmtExportDate(r.date),
+      r.systolic,
+      r.diastolic,
+      r.heartRate,
+      classifyBP(r.systolic, r.diastolic),
+      isAbnormal(r) ? '是' : '否'
+    ]);
+  });
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  // Set column widths
+  ws['!cols'] = [{ wch: 18 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 8 }];
+  XLSX.utils.book_append_sheet(wb, ws, '血压记录');
+  XLSX.writeFile(wb, `血压记录_${new Date().toISOString().slice(0,10)}.xlsx`);
+  showToast('✅ Excel已导出');
 }
 
 // === Toast ===
