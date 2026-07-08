@@ -423,10 +423,9 @@ body {
         <div class="icon">📄</div>
         <div>点击上传文件</div>
         <div style="font-size:12px;margin-top:4px">支持 CSV / Excel (.xlsx .xls) / 文本</div>
-        <div style="font-size:11px;margin-top:2px;color:var(--text-secondary)">格式：日期, 收缩压, 舒张压, 心率</div>
+        <div style="font-size:11px;margin-top:2px;color:var(--text-secondary)">🧠 自动识别列名，无需固定格式</div>
         <input type="file" id="dataFile" accept=".csv,.txt,.xlsx,.xls" onchange="importFile(event)">
       </div>
-      <button class="btn btn-outline" onclick="downloadTemplate()">⬇ 下载CSV模板</button>
     </div>
   </div>
 
@@ -640,26 +639,182 @@ function importFile(e) {
   e.target.value = '';
 }
 
+// === Smart Column Detection ===
+function smartDetectColumns(rows) {
+  if (rows.length < 2) return null;
+  const header = rows[0].map(v => String(v).trim().toLowerCase());
+  const colCount = header.length;
+
+  // Column name patterns (Chinese + English, common variants)
+  const patterns = {
+    date:    [/日期|时间|测量|记录|date|time|datetime|测量时间|测量日期|record/i],
+    sys:     [/收缩|高压|sys|systolic|收缩压|高压压/i],
+    dia:     [/舒张|低压|dia|diastolic|舒张压|低压压/i],
+    hr:      [/心率|脉搏|pulse|heartrate|hr|bpm|脉搏率/i]
+  };
+
+  // Phase 1: match by header names
+  const mapping = { date: -1, sys: -1, dia: -1, hr: -1 };
+  for (const [key, regexes] of Object.entries(patterns)) {
+    for (let c = 0; c < colCount; c++) {
+      if (mapping[key] >= 0) continue;
+      for (const re of regexes) {
+        if (re.test(header[c])) { mapping[key] = c; break; }
+      }
+    }
+  }
+
+  // Phase 2: if header match incomplete, infer by data patterns
+  const sampleRows = rows.slice(1, Math.min(rows.length, 20));
+  const unmatched = Object.entries(mapping).filter(([_, v]) => v < 0).map(([k]) => k);
+
+  if (unmatched.length > 0) {
+    // For each unmatched column, try to guess by scanning sample data
+    const usedCols = new Set(Object.values(mapping).filter(v => v >= 0));
+    for (const key of unmatched) {
+      for (let c = 0; c < colCount; c++) {
+        if (usedCols.has(c)) continue;
+        const vals = sampleRows.map(r => r[c]).filter(v => v != null && v !== '');
+        if (vals.length === 0) continue;
+
+        if (key === 'date') {
+          // Check if most values parse as dates
+          const dateCount = vals.filter(v => !isNaN(new Date(String(v)).getTime())).length;
+          if (dateCount / vals.length > 0.6) { mapping.date = c; usedCols.add(c); break; }
+        } else if (key === 'sys') {
+          // Systolic: typically 60-260, and > diastolic
+          const nums = vals.map(v => parseFloat(v)).filter(n => !isNaN(n) && n >= 60 && n <= 260);
+          if (nums.length / vals.length > 0.6) { mapping.sys = c; usedCols.add(c); break; }
+        } else if (key === 'dia') {
+          // Diastolic: typically 30-160
+          const nums = vals.map(v => parseFloat(v)).filter(n => !isNaN(n) && n >= 30 && n <= 160);
+          if (nums.length / vals.length > 0.6) { mapping.dia = c; usedCols.add(c); break; }
+        } else if (key === 'hr') {
+          // Heart rate: typically 30-220, overlaps with BP but usually lower
+          const nums = vals.map(v => parseFloat(v)).filter(n => !isNaN(n) && n >= 30 && n <= 220);
+          if (nums.length / vals.length > 0.6) { mapping.hr = c; usedCols.add(c); break; }
+        }
+      }
+    }
+  }
+
+  // Phase 3: if still missing, try positional guess for common layouts
+  // Common: date | sys | dia | hr  or  date | sys/dia | hr
+  if (mapping.date < 0 || mapping.sys < 0 || mapping.dia < 0) {
+    // Find the first date-like column as date
+    if (mapping.date < 0) {
+      for (let c = 0; c < colCount; c++) {
+        if (new Set(Object.values(mapping)).has(c)) continue;
+        const v = rows[1] && rows[1][c];
+        if (v && !isNaN(new Date(String(v)).getTime())) { mapping.date = c; break; }
+      }
+    }
+    // If we have date but no sys/dia, assume col order after date
+    if (mapping.date >= 0 && mapping.sys < 0 && mapping.dia < 0) {
+      const afterDate = [];
+      for (let c = 0; c < colCount; c++) {
+        if (c !== mapping.date && c !== mapping.hr) afterDate.push(c);
+      }
+      // Sort by numeric values descending for sys, ascending for dia
+      if (afterDate.length >= 2) {
+        // Check a few samples to see which column has higher values
+        let sum0 = 0, sum1 = 0, cnt = 0;
+        for (let r = 1; r < Math.min(rows.length, 20); r++) {
+          const v0 = parseFloat(rows[r][afterDate[0]]);
+          const v1 = parseFloat(rows[r][afterDate[1]]);
+          if (!isNaN(v0) && !isNaN(v1)) { sum0 += v0; sum1 += v1; cnt++; }
+        }
+        if (cnt > 0) {
+          mapping.sys = sum0 >= sum1 ? afterDate[0] : afterDate[1];
+          mapping.dia = sum0 >= sum1 ? afterDate[1] : afterDate[0];
+        }
+      } else if (afterDate.length === 1) {
+        // Maybe "120/80" format in one column
+        mapping.sys = afterDate[0];
+        mapping.dia = afterDate[0]; // will handle as combined
+      }
+    }
+  }
+
+  // Check if we have minimum required columns
+  const found = mapping.date >= 0 && mapping.sys >= 0 && mapping.dia >= 0;
+  return found ? mapping : null;
+}
+
 function parseDataRows(rows) {
+  if (rows.length < 2) return { count: 0, info: '' };
+
+  const mapping = smartDetectColumns(rows);
+  if (!mapping) return { count: 0, info: '❌ 无法识别数据列，请确认表格包含日期、收缩压、舒张压、心率数据' };
+
+  // Build detection info
+  const colNames = rows[0].map(v => String(v).trim());
+  const info = `识别列：${[
+    mapping.date >= 0 ? `日期="${colNames[mapping.date]}"` : '',
+    mapping.sys >= 0 ? `收缩压="${colNames[mapping.sys]}"` : '',
+    mapping.dia >= 0 ? `舒张压="${colNames[mapping.dia]}"` : '',
+    mapping.hr >= 0 ? `心率="${colNames[mapping.hr]}"` : '(未检测到)'
+  ].filter(Boolean).join('，')}`;
+
+  const isCombinedSysDia = mapping.sys === mapping.dia; // e.g. "120/80" in one cell
+  const startRow = 1; // skip header
   let count = 0;
-  rows.forEach((row, i) => {
-    // Skip header row
-    if (i === 0 && (String(row[0]).match(/日期|date|时间|time/i))) return;
-    const [dateStr, sysStr, diaStr, hrStr] = row.map(v => String(v).trim());
-    const sys = parseInt(sysStr), dia = parseInt(diaStr), hr = parseInt(hrStr);
-    if (isNaN(sys) || isNaN(dia) || isNaN(hr)) return;
-    const dateObj = new Date(dateStr);
-    if (isNaN(dateObj.getTime())) return;
+
+  for (let i = startRow; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row || row.length === 0) continue;
+
+    // Parse date
+    const dateRaw = row[mapping.date];
+    if (dateRaw == null) continue;
+    // Handle Excel serial date numbers
+    let dateObj;
+    if (typeof dateRaw === 'number' && dateRaw > 40000 && dateRaw < 60000) {
+      dateObj = new Date((dateRaw - 25569) * 86400000);
+    } else {
+      dateObj = new Date(String(dateRaw));
+    }
+    if (isNaN(dateObj.getTime())) continue;
+
+    // Parse systolic & diastolic
+    let sys, dia;
+    if (isCombinedSysDia) {
+      // Try "120/80" format
+      const combined = String(row[mapping.sys]);
+      const parts = combined.split(/[\/\\]/);
+      if (parts.length >= 2) {
+        sys = parseInt(parts[0]);
+        dia = parseInt(parts[1]);
+      } else {
+        sys = parseInt(combined);
+      }
+    } else {
+      sys = parseInt(row[mapping.sys]);
+      dia = parseInt(row[mapping.dia]);
+    }
+    if (isNaN(sys)) continue;
+
+    // Parse heart rate (optional)
+    let hr = NaN;
+    if (mapping.hr >= 0 && mapping.hr !== mapping.sys && mapping.hr !== mapping.dia) {
+      hr = parseInt(row[mapping.hr]);
+    }
+    if (isNaN(hr) || hr < 30 || hr > 220) hr = 0; // mark as 0 if missing
+
+    // Basic validation
+    if (sys < 40 || sys > 300) continue;
+    if (dia && (dia < 20 || dia > 200)) continue;
+
     records.push({
       id: Date.now() + i,
       date: dateObj.toISOString(),
       systolic: sys,
-      diastolic: dia,
+      diastolic: dia || 0,
       heartRate: hr
     });
     count++;
-  });
-  return count;
+  }
+  return { count, info };
 }
 
 function importCSV(file) {
@@ -667,9 +822,13 @@ function importCSV(file) {
   reader.onload = function(ev) {
     const lines = ev.target.result.trim().split('\n');
     const rows = lines.map(line => line.split(/[,;\t]/).map(s => s.trim()));
-    const count = parseDataRows(rows);
+    const result = parseDataRows(rows);
     save();
-    showToast(`✅ 导入 ${count} 条记录`);
+    if (result.count > 0) {
+      showToast(`✅ 导入 ${result.count} 条`);
+    } else {
+      showToast(result.info || '❌ 未识别到有效数据');
+    }
   };
   reader.readAsText(file);
 }
@@ -680,10 +839,14 @@ function importExcel(file) {
     try {
       const wb = XLSX.read(ev.target.result, { type: 'array' });
       const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
-      const count = parseDataRows(rows);
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, dateNF: 'yyyy-mm-dd hh:mm' });
+      const result = parseDataRows(rows);
       save();
-      showToast(`✅ 从Excel导入 ${count} 条记录`);
+      if (result.count > 0) {
+        showToast(`✅ Excel导入 ${result.count} 条`);
+      } else {
+        showToast(result.info || '❌ 未识别到有效数据');
+      }
     } catch (err) {
       showToast('❌ Excel解析失败，请检查格式');
     }
